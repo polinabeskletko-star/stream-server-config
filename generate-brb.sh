@@ -3,64 +3,70 @@ set -euo pipefail
 
 INPUT="${1:-brb_source.jpg}"
 OUTPUT="${2:-BRB_Australia_IRL_10s.mp4}"
-DURATION=10
-FPS=30
-FONT="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+DURATION="${DURATION:-10}"
+FPS="${FPS:-30}"
+WIDTH=1920
+HEIGHT=1080
+TOTAL_FRAMES=$((FPS * DURATION))
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "ERROR: ffmpeg is not installed." >&2
   exit 1
 fi
 
+if ! command -v ffprobe >/dev/null 2>&1; then
+  echo "ERROR: ffprobe is not installed." >&2
+  exit 1
+fi
+
 if [[ ! -f "$INPUT" ]]; then
   echo "ERROR: input image not found: $INPUT" >&2
-  echo "Put your image next to this script and name it brb_source.jpg, or pass another file name." >&2
+  echo "Put the image next to this script as brb_source.jpg, or pass another file name." >&2
   exit 1
 fi
 
-if [[ ! -f "$FONT" ]]; then
-  echo "ERROR: font not found: $FONT" >&2
-  exit 1
-fi
+TMP_OUTPUT="${OUTPUT%.*}.tmp.mp4"
+rm -f "$TMP_OUTPUT"
 
-ffmpeg -y \
+# The source image already contains all wording and graphic design.
+# This script adds only motion and finishing effects:
+# - seamless breathing zoom and tiny camera drift
+# - gentle colour/brightness pulse
+# - subtle vignette and film grain
+# - short low-opacity digital glitch flashes
+# - silent AAC track so the file is stream-safe
+
+ffmpeg -hide_banner -y \
   -loop 1 -framerate "$FPS" -i "$INPUT" \
   -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=48000" \
   -t "$DURATION" \
   -filter_complex "
     [0:v]
-      scale=2200:1238:force_original_aspect_ratio=increase,
-      crop=2200:1238,
+      scale=2304:1296:force_original_aspect_ratio=increase,
+      crop=2304:1296,
       zoompan=
-        z='1.02+0.025*sin(2*PI*on/(${FPS}*${DURATION}))':
-        x='iw/2-(iw/zoom/2)+8*sin(2*PI*on/(${FPS}*${DURATION}))':
-        y='ih/2-(ih/zoom/2)+5*cos(2*PI*on/(${FPS}*${DURATION}))':
-        d=1:s=1920x1080:fps=${FPS},
-      eq=saturation=1.08:contrast=1.04:brightness=-0.015,
-      vignette=PI/5,
-      drawbox=x=105:y=735:w=1710:h=250:color=black@0.64:t=fill,
-      drawbox=x=105:y=735:w=1710:h=250:color=0xff8c00@0.90:t=4,
-      drawtext=fontfile='${FONT}':
-        text='СВЯЗЬ ВРЕМЕННО ПРЕРВАЛАСЬ':
-        fontsize=68:fontcolor=white:
-        borderw=3:bordercolor=black@0.8:
-        x=(w-text_w)/2:y=775,
-      drawtext=fontfile='${FONT}':
-        text='Автор скоро вернётся':
-        fontsize=46:fontcolor=0xffc400:
-        borderw=2:bordercolor=black@0.8:
-        x=(w-text_w)/2:y=865,
-      drawtext=fontfile='${FONT}':
-        text='Спасибо, что остаётесь с нами!':
-        fontsize=30:fontcolor=white@0.90:
-        borderw=2:bordercolor=black@0.7:
-        x=(w-text_w)/2:y=930,
-      drawtext=fontfile='${FONT}':text='.':fontsize=56:fontcolor=0xffc400:
-        x=1185:y=855:enable='between(mod(t,3),0,3)',
-      drawtext=fontfile='${FONT}':text='.':fontsize=56:fontcolor=0xffc400:
-        x=1205:y=855:enable='between(mod(t,3),1,3)',
-      drawtext=fontfile='${FONT}':text='.':fontsize=56:fontcolor=0xffc400:
-        x=1225:y=855:enable='between(mod(t,3),2,3)',
+        z='1.035+0.018*(1-cos(2*PI*on/${TOTAL_FRAMES}))/2':
+        x='iw/2-(iw/zoom/2)+10*sin(2*PI*on/${TOTAL_FRAMES})':
+        y='ih/2-(ih/zoom/2)+6*cos(2*PI*on/${TOTAL_FRAMES})':
+        d=1:s=${WIDTH}x${HEIGHT}:fps=${FPS},
+      setsar=1,
+      eq=eval=frame:
+        contrast='1.045+0.015*sin(2*PI*t/${DURATION})':
+        brightness='-0.018+0.008*sin(2*PI*t/${DURATION})':
+        saturation='1.08+0.025*sin(2*PI*t/${DURATION})',
+      vignette=angle=PI/5.2:eval=frame,
+      noise=alls=2.2:allf=t+u,
+      split=2[clean][glitchsrc];
+
+    [glitchsrc]
+      crop=${WIDTH}:110:0:430,
+      rgbashift=rh=10:bh=-8:gh=3,
+      format=rgba,
+      colorchannelmixer=aa=0.18[glitch];
+
+    [clean][glitch]
+      overlay=x='18*sin(35*t)':y=430:
+        enable='between(mod(t,5),4.72,4.82)+between(mod(t,7),6.45,6.53)',
       format=yuv420p[v]
   " \
   -map "[v]" -map 1:a:0 \
@@ -70,8 +76,8 @@ ffmpeg -y \
   -level 4.1 \
   -pix_fmt yuv420p \
   -r "$FPS" \
-  -g 60 \
-  -keyint_min 60 \
+  -g $((FPS * 2)) \
+  -keyint_min $((FPS * 2)) \
   -sc_threshold 0 \
   -b:v 4500k \
   -maxrate 4500k \
@@ -81,7 +87,9 @@ ffmpeg -y \
   -ar 48000 \
   -movflags +faststart \
   -shortest \
-  "$OUTPUT"
+  "$TMP_OUTPUT"
+
+mv -f "$TMP_OUTPUT" "$OUTPUT"
 
 ffprobe -v error \
   -show_entries format=duration:stream=codec_name,width,height,r_frame_rate,sample_rate \
@@ -90,3 +98,5 @@ ffprobe -v error \
 
 echo
 echo "Created: $(realpath "$OUTPUT")"
+echo "Source:  $(realpath "$INPUT")"
+echo "Effects: seamless zoom, drift, colour pulse, vignette, grain and subtle glitch"
