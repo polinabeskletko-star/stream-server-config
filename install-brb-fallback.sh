@@ -120,7 +120,6 @@ mkdir -p "$STATE_DIR"
 {
   echo ""
   echo "===== $(date --iso-8601=seconds) Moblin stream READY ====="
-  /root/notify_telegram_stream_start.sh >> /var/log/telegram-stream-notify.log 2>&1 || true
 
   # Cancel the 3-minute completion timer.
   rm -f "$STATE_DIR/offline"
@@ -148,6 +147,9 @@ mkdir -p "$STATE_DIR"
     fi
     rm -f "$STATE_DIR/fallback.pid"
   fi
+
+  # The reconnect timer is cancelled before any network call to Telegram.
+  /root/notify_telegram_stream_start.sh >> /var/log/telegram-stream-notify.log 2>&1 || true
 
   # Existing behavior is preserved: create/reuse and start a YouTube broadcast.
   /root/youtube-venv/bin/python /root/start_youtube.py
@@ -196,6 +198,9 @@ mkdir -p "$STATE_DIR"
     [[ -f "$STATE_DIR/offline" ]] || exit 0
 
     echo "$(date --iso-8601=seconds) Moblin did not return within $TIMEOUT_SECONDS seconds."
+
+    # Recheck immediately before cleanup in case Moblin reconnected.
+    [[ -f "$STATE_DIR/offline" ]] || exit 0
 
     if [[ -f "$STATE_DIR/fallback.pid" ]]; then
       PID="$(cat "$STATE_DIR/fallback.pid" 2>/dev/null || true)"
