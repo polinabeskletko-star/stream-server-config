@@ -7,6 +7,8 @@ VIDEO="/root/stream-server-config/BRB_Australia_IRL_10s.mp4"
 START_PY="/root/start_youtube.py"
 COMPLETE_PY="/root/complete_youtube.py"
 PYTHON="/root/youtube-venv/bin/python"
+TELEGRAM_START_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/notify_telegram_stream_start.sh"
+TELEGRAM_END_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/notify_telegram_stream_end.sh"
 
 READY_HOOK="/root/moblin_stream_ready.sh"
 NOT_READY_HOOK="/root/moblin_stream_not_ready.sh"
@@ -24,7 +26,7 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-for required in "$CONFIG" "$RESTREAM" "$VIDEO" "$START_PY" "$COMPLETE_PY" "$PYTHON"; do
+for required in "$CONFIG" "$RESTREAM" "$VIDEO" "$START_PY" "$COMPLETE_PY" "$PYTHON" "$TELEGRAM_START_SOURCE" "$TELEGRAM_END_SOURCE"; do
   if [[ ! -e "$required" ]]; then
     echo "ERROR: required file was not found: $required" >&2
     exit 1
@@ -37,6 +39,8 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
 fi
 
 cp "$CONFIG" "$CONFIG_BACKUP"
+install -m 700 "$TELEGRAM_START_SOURCE" /root/notify_telegram_stream_start.sh
+install -m 700 "$TELEGRAM_END_SOURCE" /root/notify_telegram_stream_end.sh
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 
@@ -116,6 +120,7 @@ mkdir -p "$STATE_DIR"
 {
   echo ""
   echo "===== $(date --iso-8601=seconds) Moblin stream READY ====="
+  /root/notify_telegram_stream_start.sh >> /var/log/telegram-stream-notify.log 2>&1 || true
 
   # Cancel the 3-minute completion timer.
   rm -f "$STATE_DIR/offline"
@@ -205,6 +210,7 @@ mkdir -p "$STATE_DIR"
 
     echo "Completing YouTube broadcast after the 3-minute grace period."
     /root/youtube-venv/bin/python /root/complete_youtube.py
+    /root/notify_telegram_stream_end.sh >> /var/log/telegram-stream-notify.log 2>&1 || true
   ) >>"$LOG_FILE" 2>&1 &
 
   TIMER_PID=$!
@@ -277,7 +283,7 @@ systemctl restart mediamtx
 systemctl --no-pager --full status mediamtx
 
 echo
-echo "BRB fallback installed."
+echo "BRB fallback and Telegram announcement cleanup installed."
 echo "Temporary outage: BRB video starts immediately."
 echo "Moblin returns within 180 seconds: BRB stops and the same broadcast continues."
 echo "Moblin remains offline for 180 seconds: BRB stops and YouTube is completed through the existing API hook."
